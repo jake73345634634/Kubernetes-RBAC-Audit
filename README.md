@@ -1,53 +1,33 @@
-# ExtensiveRoleCheck
+<h3>📝 Kubernetes RBAC Audit</h3>
+<p>
+  <a href="https://kubernetes.io/docs/reference/access-authn-authz/rbac">Documentation</a>
+</p>
 
-`ExtensiveRoleCheck` is a Python tool that scans the Kubernetes RBAC for risky roles. The tool is a part of the "Kubernetes Pentest Methdology" blog post series.
-```
-usage: ExtensiveRoleCheck.py [-h] [--clusterRoles CLUSTERROLES] [--roles ROLES] [--roleBindings ROLEBINDINGS] [--clusterRoleBindings CLUSTERROLEBINDINGS]
-```
+---
+✨ Kubernetes RBAC is a key security control to ensure that cluster users and workloads have only the access to resources required to execute their roles.
 
-This tool has been modified and updated by Jake.
+Process risky roles and role bindings found in the RBAC API.
 
-## Overview
+See [here](https://github.com/cyberark/kubernetes-rbac-audit) for the original code. Updated and maintained by Jake as the source was forgotton.
 
-**Status**: Alpha
+---
+<h4>Requirements</h4>
 
-The RBAC API is a set of roles that administrators can configure to limit access to the Kubernetes resources. The *ExtensiveRoleCheck* automates the searching process and outputs the risky roles and rolebindings found in the RBAC API. 
+The roles, role bindings, cluster roles, and cluster role bindings must be exported with the following commands:
 
-## Requirements:
-*ExtensiveRoleCheck* requires python3
-
-*ExtensiveRoleCheck* works in offline mode. This means that you should first export the following `JSON` from your Kubernetes cluster configuration:
-
- - Roles 
- - ClusterRoles 
- - RoleBindings 
- - ClusterRoleBindings
-
-To export those files you will need access permissions in the Kubernetes cluster. To export them, you might use the following commands:
-
-**Export RBAC Roles:**
 ```
 kubectl get roles --all-namespaces -o json > roles.json
-```
-**Export RBAC ClusterRoles:**
-```
-kubectl get clusterroles -o json > clusterroles.json
-```
-**Export RBAC RolesBindings:**
-```
 kubectl get rolebindings --all-namespaces -o json > rolebindings.json
-```
-**Export RBAC Cluster RolesBindings:**
-```
+kubectl get clusterroles -o json > clusterroles.json
 kubectl get clusterrolebindings -o json > clusterrolebindings.json
 ```
 
-## Example & Output:
-**Usage**
-```
-python ExtensiveRoleCheck.py --clusterRoles clusterroles.json --roles Roles.json --roleBindings rolebindings.json --clusterRoleBindings clusterrolebindings.json
-```
-![Output example](https://github.com/cyberark/kubernetes-rbac-audit/blob/master/output-example.png)
+---
+<h4>Usage</h4>
 
-##  Maintainers:
-Or Ida: or.ida@cyberark.com
+```
+PS D:\Kubernetes-RBAC-Audit> python3 audit.py --roles roles.json --roleBindings rolebindings.json --clusterroles clusterroles.json --clusterrolebindings clusterrolebindings.json
+[ClusterRole] cluster-pod-creator has permission to create pods
+[ClusterRole] cluster-secret-reader has permission to list pods
+...
+```
