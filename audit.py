@@ -6,9 +6,9 @@ from colorama import init as init_coloarma, Fore
 
 def get_argument_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--clusterRoles", type=str, required=False, help="ClusterRoles JSON file")
-    parser.add_argument("--roles", type=str, required=False, help="roles JSON file")
+    parser.add_argument("--roles", type=str, required=False, help="Roles JSON file")
     parser.add_argument("--roleBindings", type=str, required=False, help="RoleBindings JSON file")
+    parser.add_argument("--clusterRoles", type=str, required=False, help="ClusterRoles JSON file")
     parser.add_argument("--clusterRoleBindings", type=str, required=False, help="ClusterRoleBindings JSON file")
 
     return parser.parse_args()
@@ -254,12 +254,6 @@ class RoleBindingChecker(object):
 if __name__ == "__main__":
     args = get_argument_parser()
 
-    if args.clusterRoles:
-        role_kind = "ClusterRole"
-        clusterRole_json_file = open_file(args.clusterRoles)
-        extensiveClusterRolesChecker = ExtensiveRolesChecker(clusterRole_json_file, role_kind)
-        extensive_ClusterRoles = [result for result in extensiveClusterRolesChecker.results]
-
     if args.roles:
         role_kind = "Role"
         Role_json_file = open_file(args.roles)
@@ -267,12 +261,18 @@ if __name__ == "__main__":
         extensive_roles = [result for result in extensiveRolesChecker.results if result not in extensive_ClusterRoles]
         extensive_roles = extensive_roles + extensive_ClusterRoles
 
-    if args.clusterRoleBindings:
-        bind_kind = "ClusterRoleBinding"
-        clusterRoleBinding_json_file = open_file(args.clusterRoleBindings)
-        extensive_clusteRoleBindings = RoleBindingChecker(clusterRoleBinding_json_file, extensive_roles, bind_kind)
-
     if args.roleBindings:
         bind_kind = "RoleBinding"
         RoleBinding_json_file = open_file(args.roleBindings)
         extensive_RoleBindings = RoleBindingChecker(RoleBinding_json_file, extensive_roles, bind_kind)
+
+    if args.clusterRoles:
+        role_kind = "ClusterRole"
+        clusterRole_json_file = open_file(args.clusterRoles)
+        extensiveClusterRolesChecker = ExtensiveRolesChecker(clusterRole_json_file, role_kind)
+        extensive_ClusterRoles = [result for result in extensiveClusterRolesChecker.results]
+
+    if args.clusterRoleBindings:
+        bind_kind = "ClusterRoleBinding"
+        clusterRoleBinding_json_file = open_file(args.clusterRoleBindings)
+        extensive_clusteRoleBindings = RoleBindingChecker(clusterRoleBinding_json_file, extensive_roles, bind_kind)
