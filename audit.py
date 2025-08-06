@@ -15,8 +15,12 @@ def get_argument_parser():
 
 
 def open_file(file_path):
-    with open(file_path) as f:
-        return json.load(f)
+    try:
+        with open(file_path) as f:
+            return json.load(f)
+    except json.decoder.JSONDecodeError:
+        print(f"{Fore.WHITE}[Exiting] re-encode {file_path} as UTF-8 then continue.")
+        exit()
 
 
 class ExtensiveRolesChecker(object):
@@ -254,6 +258,12 @@ class RoleBindingChecker(object):
 if __name__ == "__main__":
     args = get_argument_parser()
 
+    if args.clusterRoles:
+        role_kind = "ClusterRole"
+        clusterRole_json_file = open_file(args.clusterRoles)
+        extensiveClusterRolesChecker = ExtensiveRolesChecker(clusterRole_json_file, role_kind)
+        extensive_ClusterRoles = [result for result in extensiveClusterRolesChecker.results]
+
     if args.roles:
         role_kind = "Role"
         Role_json_file = open_file(args.roles)
@@ -261,18 +271,12 @@ if __name__ == "__main__":
         extensive_roles = [result for result in extensiveRolesChecker.results if result not in extensive_ClusterRoles]
         extensive_roles = extensive_roles + extensive_ClusterRoles
 
-    if args.roleBindings:
-        bind_kind = "RoleBinding"
-        RoleBinding_json_file = open_file(args.roleBindings)
-        extensive_RoleBindings = RoleBindingChecker(RoleBinding_json_file, extensive_roles, bind_kind)
-
-    if args.clusterRoles:
-        role_kind = "ClusterRole"
-        clusterRole_json_file = open_file(args.clusterRoles)
-        extensiveClusterRolesChecker = ExtensiveRolesChecker(clusterRole_json_file, role_kind)
-        extensive_ClusterRoles = [result for result in extensiveClusterRolesChecker.results]
-
     if args.clusterRoleBindings:
         bind_kind = "ClusterRoleBinding"
         clusterRoleBinding_json_file = open_file(args.clusterRoleBindings)
         extensive_clusteRoleBindings = RoleBindingChecker(clusterRoleBinding_json_file, extensive_roles, bind_kind)
+
+    if args.roleBindings:
+        bind_kind = "RoleBinding"
+        RoleBinding_json_file = open_file(args.roleBindings)
+        extensive_RoleBindings = RoleBindingChecker(RoleBinding_json_file, extensive_roles, bind_kind)
