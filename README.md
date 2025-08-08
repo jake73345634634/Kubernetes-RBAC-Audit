@@ -26,7 +26,7 @@ kubectl get clusterrolebindings -o json > clusterrolebindings.json
 <h4>Usage</h4>
 
 ```
-PS D:\Kubernetes-RBAC-Audit> python3 audit.py --roles roles.json --roleBindings rolebindings.json --clusterroles clusterRoles.json --clusterRoleBindings clusterrolebindings.json
+PS D:\Kubernetes-RBAC-Audit> python3 audit.py --roles roles.json --roleBindings rolebindings.json --clusterRoles clusterroles.json --clusterRoleBindings clusterrolebindings.json
 [ClusterRole] cluster-pod-creator has permission to create pods
 [ClusterRole] cluster-secret-reader has permission to list pods
 ...
