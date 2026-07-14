@@ -13,7 +13,13 @@ See [here](https://github.com/cyberark/kubernetes-rbac-audit) for the original c
 ---
 <h4>Requirements</h4>
 
-The roles, role bindings, cluster roles, and cluster role bindings must be exported with the following commands:
+Install the Python dependency:
+
+```
+pip install -r requirements.txt
+```
+
+The roles, role bindings, cluster roles, and cluster role bindings should be exported with the following commands (supply whichever you have — at least one of roles/clusterroles is required):
 
 ```
 kubectl get roles --all-namespaces -o json > roles.json
@@ -27,7 +33,25 @@ kubectl get clusterrolebindings -o json > clusterrolebindings.json
 
 ```
 PS D:\Kubernetes-RBAC-Audit> python3 audit.py --roles roles.json --roleBindings rolebindings.json --clusterRoles clusterroles.json --clusterRoleBindings clusterrolebindings.json
-[ClusterRole] cluster-pod-creator has permission to create pods
-[ClusterRole] cluster-secret-reader has permission to list pods
-...
+================================================================
+ Kubernetes RBAC Audit - findings
+================================================================
+4 risky role(s): 1 critical, 2 high, 1 medium.
+3 of them are EXPOSED (bound to a subject) - fix these first.
+
+[EXPOSED] ClusterRole cluster-admin-ish
+    CRITICAL full admin: all verbs on all resources ('*'/'*')
+      -> granted to User: alice (via ClusterRoleBinding crb1)
+
+[EXPOSED] Role dev/pod-exec
+    HIGH     can exec into pods
+    HIGH     can create 'pods' (schedules arbitrary pods -> node/secret access)
+      -> granted to ServiceAccount: dev/builder (via RoleBinding rb1)
+
+[unbound] ClusterRole secret-reader
+    HIGH     can read secrets
 ```
+
+Findings are grouped by role, ranked by severity (CRITICAL/HIGH/MEDIUM), and roles that are actually bound to a subject are flagged `[EXPOSED]` and listed first. Bindings are matched to roles by both `roleRef` kind and namespace, so a `Role` and a `ClusterRole` that share a name are never confused.
+
+Any combination of the four files is accepted (at least one of roles/clusterroles). The tool exits `0` when nothing risky is found, `1` when there are findings (useful in CI), and `2` on a usage or file error.
