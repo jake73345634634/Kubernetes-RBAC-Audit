@@ -13,11 +13,18 @@ See [here](https://github.com/cyberark/kubernetes-rbac-audit) for the original c
 ---
 <h4>Requirements</h4>
 
-Install the Python dependency:
+Two interchangeable implementations are provided — use whichever suits your box:
 
-```
-pip install -r requirements.txt
-```
+- **`audit.py`** (cross-platform) — needs Python 3 and `colorama`:
+  ```
+  pip install -r requirements.txt
+  ```
+- **`audit.sh`** (bash / macOS) — needs only [`jq`](https://jqlang.github.io/jq/):
+  ```
+  brew install jq
+  ```
+
+Both take the same arguments and produce identical output.
 
 The roles, role bindings, cluster roles, and cluster role bindings should be exported with the following commands (supply whichever you have — at least one of roles/clusterroles is required):
 
@@ -54,4 +61,10 @@ PS D:\Kubernetes-RBAC-Audit> python3 audit.py --roles roles.json --roleBindings 
 
 Findings are grouped by role, ranked by severity (CRITICAL/HIGH/MEDIUM), and roles that are actually bound to a subject are flagged `[EXPOSED]` and listed first. Bindings are matched to roles by both `roleRef` kind and namespace, so a `Role` and a `ClusterRole` that share a name are never confused.
 
-Any combination of the four files is accepted (at least one of roles/clusterroles). The tool exits `0` when nothing risky is found, `1` when there are findings (useful in CI), and `2` on a usage or file error.
+On macOS/Linux the bash port takes the same flags:
+
+```
+./audit.sh --roles roles.json --roleBindings rolebindings.json --clusterRoles clusterroles.json --clusterRoleBindings clusterrolebindings.json
+```
+
+Any combination of the four files is accepted (at least one of roles/clusterroles). Both tools exit `0` when nothing risky is found, `1` when there are findings (useful in CI), and `2` on a usage or file error.
