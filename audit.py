@@ -47,8 +47,10 @@ def parse_args():
     parser.add_argument("--roleBindings", metavar="FILE", help="RoleBindings JSON file")
     parser.add_argument("--clusterRoles", metavar="FILE", help="ClusterRoles JSON file")
     parser.add_argument("--clusterRoleBindings", metavar="FILE", help="ClusterRoleBindings JSON file")
-    parser.add_argument("--markdown", metavar="FILE",
-                        help="Also write a Markdown report (pentest-ready) to FILE")
+    parser.add_argument("--output", metavar="FILE",
+                        help="Also write pentest-ready reports: FILE.md (concise 'Affects' "
+                             "tables) and FILE.xlsx (full 'Evidence' spreadsheet). A trailing "
+                             ".md/.xlsx extension on FILE is ignored.")
     return parser.parse_args()
 
 
@@ -126,14 +128,14 @@ class RbacAuditor:
 
         # Full cluster-admin: every verb on every resource.
         if "*" in res and "*" in vrb:
-            findings.append((CRITICAL, "full admin: all verbs on all resources ('*'/'*')"))
+            findings.append((CRITICAL, "full admin"))
 
         # A specific dangerous verb against every resource ('*').
         if "*" in res:
             for verb in ("delete", "deletecollection", "create", "impersonate", "list", "get"):
                 if verb in vrb:
                     sev = HIGH if verb in {"delete", "deletecollection", "create", "impersonate"} else MEDIUM
-                    findings.append((sev, f"can '{verb}' ANY resource (wildcard '*')"))
+                    findings.append((sev, f"{verb} any resource"))
                     break
 
         # Any verb ('*') on a security-sensitive resource.
@@ -144,18 +146,18 @@ class RbacAuditor:
         if "*" in vrb:
             hit = next((r for r in sensitive if r in res), None)
             if hit:
-                findings.append((HIGH, f"can perform ANY verb on '{hit}'"))
+                findings.append((HIGH, f"perform any verb on {hit}"))
 
         # Read access to secrets / configmaps.
         if "secrets" in res and (vrb & read_verbs):
-            findings.append((HIGH, "can read secrets"))
+            findings.append((HIGH, "read secrets"))
         if "configmaps" in res and (vrb & read_verbs):
-            findings.append((MEDIUM, "can read configmaps"))
+            findings.append((MEDIUM, "read configmaps"))
 
         # Privilege escalation via creating roles or bindings.
         for r in ("clusterrolebindings", "rolebindings", "clusterroles", "roles"):
             if r in res and ("create" in vrb or "*" in vrb):
-                findings.append((HIGH, f"can create '{r}' (privilege escalation)"))
+                findings.append((HIGH, f"create {r}"))
                 break
 
         # Creating/updating pod-spawning workloads.
@@ -164,15 +166,15 @@ class RbacAuditor:
         spawn_hit = next((r for r in pod_spawning if r in res), None)
         if spawn_hit:
             if "create" in vrb:
-                findings.append((HIGH, f"can create '{spawn_hit}' (schedules arbitrary pods -> node/secret access)"))
+                findings.append((HIGH, f"create {spawn_hit}"))
             elif "update" in vrb:
-                findings.append((MEDIUM, f"can update '{spawn_hit}'"))
+                findings.append((MEDIUM, f"update {spawn_hit}"))
 
         # Pod subresources used for shell access into running workloads.
         if "pods/exec" in res and (vrb & {"*", "create", "get"}):
-            findings.append((HIGH, "can exec into pods"))
+            findings.append((HIGH, "exec into pods"))
         if "pods/attach" in res and (vrb & {"*", "create", "get"}):
-            findings.append((HIGH, "can attach to running pods"))
+            findings.append((HIGH, "attach to running pods"))
 
         return findings
 
@@ -293,7 +295,10 @@ class RbacAuditor:
             print(f"      {Fore.CYAN}-> granted to{Style.RESET_ALL} {sub['kind']}: {who} "
                   f"(via {sub['binding_kind']} {sub['binding_name']})")
 
-    # -- markdown report ----------------------------------------------------
+    # -- report helpers -----------------------------------------------------
+    EXPOSED_TITLE = "Exposed RBAC Roles"
+    UNBOUND_TITLE = "Unbound RBAC Roles"
+
     @staticmethod
     def _location(role):
         if role["namespace"]:
@@ -301,65 +306,151 @@ class RbacAuditor:
         return f"{role['kind']} {role['name']}"
 
     @staticmethod
-    def _md(text):
-        # Escape the pipe so it can't break a Markdown table cell.
-        return str(text).replace("|", "\\|")
+    def _subject_who(sub):
+        return f"{sub['namespace']}/{sub['name']}" if sub["namespace"] else sub["name"]
 
-    def markdown(self):
-        roles = sorted(self._roles.values(), key=self._sort_key)
-        out = ["# Kubernetes RBAC Audit", ""]
+    def _exposed_roles(self):
+        return [r for r in sorted(self._roles.values(), key=self._sort_key) if r["subjects"]]
 
-        if not roles:
-            out.append("No risky roles found.")
-            return "\n".join(out) + "\n"
+    def _unbound_roles(self):
+        return [r for r in sorted(self._roles.values(), key=self._sort_key) if not r["subjects"]]
 
+    def _access_bullets(self, role):
+        """Effective-access issues (no severities) as a list of bullet lines."""
+        items = sorted(role["findings"], key=lambda f: _SEVERITY_ORDER[f[0]])
+        return [f"- {issue}" for _, issue in items]
+
+    @staticmethod
+    def _grid_table(headers, rows):
+        """Render a Pandoc grid table.
+
+        `rows` is a list of rows; each row is a list of cells; each cell is a
+        list of text lines (so a cell can hold a multi-line bullet list).
+        """
+        ncols = len(headers)
+        widths = [len(h) for h in headers]
+        for row in rows:
+            for i, cell in enumerate(row):
+                for line in cell:
+                    widths[i] = max(widths[i], len(line))
+
+        def rule(fill):
+            return "+" + "+".join(fill * (w + 2) for w in widths) + "+"
+
+        def render(cells):
+            height = max((len(c) for c in cells), default=1)
+            lines = []
+            for row_line in range(height):
+                parts = []
+                for i in range(ncols):
+                    text = cells[i][row_line] if row_line < len(cells[i]) else ""
+                    parts.append(" " + text.ljust(widths[i]) + " ")
+                lines.append("|" + "|".join(parts) + "|")
+            return lines
+
+        out = [rule("-")]
+        out += render([[h] for h in headers])
+        out.append(rule("="))
+        for row in rows:
+            out += render(row)
+            out.append(rule("-"))
+        return "\n".join(out)
+
+    def _summary_line(self, roles):
         counts = {CRITICAL: 0, HIGH: 0, MEDIUM: 0}
         for role in roles:
             counts[self._worst(role)] += 1
-        exposed = [r for r in roles if r["subjects"]]
+        return (f"**{len(roles)} role(s):** {counts[CRITICAL]} critical, "
+                f"{counts[HIGH]} high, {counts[MEDIUM]} medium.")
 
-        out.append(f"**{len(roles)} risky role(s):** {counts[CRITICAL]} critical, "
-                   f"{counts[HIGH]} high, {counts[MEDIUM]} medium.")
-        out.append("")
-        if self._bindings_loaded:
-            out.append(f"**{len(exposed)} of them are EXPOSED** (bound to a subject) - fix these first.")
-        else:
-            out.append("_No binding files supplied; cannot tell which risky roles are "
-                       "actually granted to anyone._")
-        out.append("")
+    # -- markdown reports ---------------------------------------------------
+    def markdown_exposed(self):
+        roles = self._exposed_roles()
+        out = [f"# {self.EXPOSED_TITLE}", ""]
+        if not roles:
+            out.append("None: no risky role is currently bound to a subject.")
+            return "\n".join(out) + "\n"
 
-        def access_cell(role):
-            items = sorted(role["findings"], key=lambda f: _SEVERITY_ORDER[f[0]])
-            return "<br>".join(self._md(f"{sev}: {issue}") for sev, issue in items)
-
-        out += ["## Exposed grants (Affects)", ""]
-        if exposed:
-            out.append("| Severity | Granted to | Effective access | Role | Binding |")
-            out.append("| --- | --- | --- | --- | --- |")
-            for role in exposed:
-                loc = self._md(self._location(role))
-                access = access_cell(role)
-                worst = self._worst(role)
-                for sub in role["subjects"]:
-                    who = f"{sub['namespace']}/{sub['name']}" if sub["namespace"] else sub["name"]
-                    who = self._md(f"{sub['kind']}: {who}")
-                    binding = self._md(f"{sub['binding_kind']} {sub['binding_name']}")
-                    out.append(f"| {worst} | {who} | {access} | {loc} | {binding} |")
-        else:
-            out.append("_None: no risky role is currently bound to a subject._")
-        out.append("")
-
-        unbound = [r for r in roles if not r["subjects"]]
-        if unbound:
-            out += ["## Unbound risky roles (latent - defined but not granted)", ""]
-            out.append("| Severity | Role | Effective access |")
-            out.append("| --- | --- | --- |")
-            for role in unbound:
-                out.append(f"| {self._worst(role)} | {self._md(self._location(role))} "
-                           f"| {access_cell(role)} |")
-            out.append("")
-
+        out += [self._summary_line(roles), ""]
+        rows = []
+        for role in roles:
+            for sub in role["subjects"]:
+                rows.append([
+                    [self._worst(role)],
+                    [f"{sub['kind']}: {self._subject_who(sub)}"],
+                    self._access_bullets(role),
+                ])
+        out.append(self._grid_table(["Severity", "Granted To", "Effective Access"], rows))
         return "\n".join(out) + "\n"
+
+    def markdown_unbound(self):
+        roles = self._unbound_roles()
+        out = [f"# {self.UNBOUND_TITLE}", ""]
+        if not roles:
+            out.append("None: every risky role is bound to a subject.")
+            return "\n".join(out) + "\n"
+
+        out += [self._summary_line(roles), ""]
+        rows = [[[self._worst(role)], [self._location(role)], self._access_bullets(role)]
+                for role in roles]
+        out.append(self._grid_table(["Severity", "Role", "Effective Access"], rows))
+        return "\n".join(out) + "\n"
+
+    # -- xlsx reports (full "Evidence" spreadsheets) ------------------------
+    @staticmethod
+    def _style_sheet(ws, headers):
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+
+        header_fill = PatternFill("solid", fgColor="1F2937")
+        header_font = Font(bold=True, color="FFFFFF")
+        for col, title in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(vertical="center")
+            letter = get_column_letter(col)
+            width = max(len(title), *(len(str(c.value or "")) for c in ws[letter]))
+            ws.column_dimensions[letter].width = min(max(width + 2, 12), 60)
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+
+    def write_xlsx_exposed(self, file_path):
+        """One row per permission per grant; every column populated, no Status."""
+        from openpyxl import Workbook
+
+        headers = ["Severity", "Kind", "Namespace", "Role", "Effective Access",
+                   "Subject Kind", "Subject Namespace", "Subject",
+                   "Binding Kind", "Binding"]
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Exposed Grants"
+        ws.append(headers)
+        for role in self._exposed_roles():
+            namespace = role["namespace"] or ""
+            for sev, issue in sorted(role["findings"], key=lambda f: _SEVERITY_ORDER[f[0]]):
+                for sub in role["subjects"]:
+                    ws.append([sev, role["kind"], namespace, role["name"], issue,
+                               sub["kind"], sub["namespace"] or "", sub["name"],
+                               sub["binding_kind"], sub["binding_name"]])
+        self._style_sheet(ws, headers)
+        wb.save(file_path)
+
+    def write_xlsx_unbound(self, file_path):
+        """One row per risky permission of each unbound role, no Status."""
+        from openpyxl import Workbook
+
+        headers = ["Severity", "Kind", "Namespace", "Role", "Effective Access"]
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Unbound Roles"
+        ws.append(headers)
+        for role in self._unbound_roles():
+            namespace = role["namespace"] or ""
+            for sev, issue in sorted(role["findings"], key=lambda f: _SEVERITY_ORDER[f[0]]):
+                ws.append([sev, role["kind"], namespace, role["name"], issue])
+        self._style_sheet(ws, headers)
+        wb.save(file_path)
 
 
 def main():
@@ -384,13 +475,31 @@ def main():
 
     exit_code = auditor.report()
 
-    if args.markdown:
-        try:
-            with open(args.markdown, "w", encoding="utf-8") as handle:
-                handle.write(auditor.markdown())
-        except OSError as err:
-            _fatal(f"could not write markdown report to {args.markdown}: {err}")
-        print(f"\n{Fore.CYAN}[markdown]{Style.RESET_ALL} report written to {args.markdown}")
+    if args.output:
+        base = args.output
+        for ext in (".md", ".xlsx"):
+            if base.lower().endswith(ext):
+                base = base[: -len(ext)]
+                break
+
+        # One Markdown ("Affects") and one XLSX ("Evidence") per issue type.
+        outputs = [
+            (f"{base}-exposed.md", auditor.markdown_exposed, "text"),
+            (f"{base}-exposed.xlsx", auditor.write_xlsx_exposed, "file"),
+            (f"{base}-unbound.md", auditor.markdown_unbound, "text"),
+            (f"{base}-unbound.xlsx", auditor.write_xlsx_unbound, "file"),
+        ]
+        print()
+        for path, producer, kind in outputs:
+            try:
+                if kind == "text":
+                    with open(path, "w", encoding="utf-8") as handle:
+                        handle.write(producer())
+                else:
+                    producer(path)
+            except OSError as err:
+                _fatal(f"could not write report to {path}: {err}")
+            print(f"{Fore.CYAN}[output]{Style.RESET_ALL} wrote {path}")
 
     return exit_code
 
