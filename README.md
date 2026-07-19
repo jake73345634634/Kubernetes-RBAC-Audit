@@ -68,3 +68,15 @@ On macOS/Linux the bash port takes the same flags:
 ```
 
 Any combination of the four files is accepted (at least one of roles/clusterroles). Both tools exit `0` when nothing risky is found, `1` when there are findings (useful in CI), and `2` on a usage or file error.
+
+---
+<h4>Markdown report</h4>
+
+Add `--markdown FILE` to either tool to also write a pentest-ready Markdown report alongside the console output:
+
+```
+python3 audit.py --roles roles.json --roleBindings rolebindings.json --clusterRoles clusterroles.json --clusterRoleBindings clusterrolebindings.json --markdown rbac-findings.md
+./audit.sh   --roles roles.json --roleBindings rolebindings.json --clusterRoles clusterroles.json --clusterRoleBindings clusterrolebindings.json --markdown rbac-findings.md
+```
+
+The report has a summary line, an **Exposed grants (Affects)** table (one row per subject → role grant, ready to drop into a finding's "Affects" section), and a separate **Unbound risky roles** table for latent roles that no subject currently holds. Both tools produce the same Markdown.

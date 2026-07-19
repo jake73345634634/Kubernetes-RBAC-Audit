@@ -28,9 +28,10 @@ prog="$(basename "$0")"
 
 usage() {
     cat >&2 <<EOF
-Usage: $prog [--roles FILE] [--roleBindings FILE] [--clusterRoles FILE] [--clusterRoleBindings FILE]
+Usage: $prog [--roles FILE] [--roleBindings FILE] [--clusterRoles FILE] [--clusterRoleBindings FILE] [--markdown FILE]
 
 At least one of --roles or --clusterRoles is required.
+--markdown FILE additionally writes a pentest-ready Markdown report.
 Requires jq (brew install jq). Set NO_COLOR=1 to disable colour.
 EOF
 }
@@ -39,6 +40,7 @@ roles=/dev/null
 rbindings=/dev/null
 croles=/dev/null
 crbindings=/dev/null
+markdown=
 have_roles=false
 have_croles=false
 have_bindings=false
@@ -57,6 +59,7 @@ while [ $# -gt 0 ]; do
         --roleBindings)         need_value "$1" "${2:-}"; rbindings="$2";  have_bindings=true; shift 2 ;;
         --clusterRoles)         need_value "$1" "${2:-}"; croles="$2";     have_croles=true;   shift 2 ;;
         --clusterRoleBindings)  need_value "$1" "${2:-}"; crbindings="$2"; have_bindings=true; shift 2 ;;
+        --markdown)             need_value "$1" "${2:-}"; markdown="$2";                       shift 2 ;;
         -h|--help)              usage; exit 0 ;;
         *) echo "error: unknown argument: $1" >&2; usage; exit 2 ;;
     esac
@@ -237,6 +240,50 @@ def pad($s): (8 - ($s|length)) as $p | $s + (if $p > 0 then (" " * $p) else "" e
 JQ
 )
 
+# --- jq: render the model (input) into a pentest-ready Markdown report ---
+MD_PROGRAM=$(cat <<'JQ'
+def sevOrder($s): if $s=="CRITICAL" then 0 elif $s=="HIGH" then 1 else 2 end;
+def esc: gsub("\\|"; "\\|");
+def loc: if .namespace != "" then "\(.kind) \(.namespace)/\(.name)" else "\(.kind) \(.name)" end;
+def accessCell: [ .findings | sort_by(sevOrder(.severity))[] | "\(.severity): \(.issue)" | esc ] | join("<br>");
+def worst: [.findings[].severity] | map(sevOrder(.)) | min | if . == 0 then "CRITICAL" elif . == 1 then "HIGH" else "MEDIUM" end;
+
+. as $roles
+| ($roles | sort_by([ (if (.subjects|length) > 0 then 0 else 1 end),
+                      ([.findings[].severity] | map(sevOrder(.)) | min), .kind, .name ])) as $sorted
+| ($sorted | map(select((.subjects|length) > 0))) as $exposed
+| ($sorted | map(select((.subjects|length) == 0))) as $unbound
+| ($sorted | map([.findings[].severity] | map(sevOrder(.)) | min)) as $worsts
+| ($worsts | map(select(. == 0)) | length) as $crit
+| ($worsts | map(select(. == 1)) | length) as $high
+| ($worsts | map(select(. == 2)) | length) as $med
+| ["# Kubernetes RBAC Audit", ""]
++ ( if ($sorted|length) == 0 then ["No risky roles found."]
+    else
+      [ "**\($sorted|length) risky role(s):** \($crit) critical, \($high) high, \($med) medium.", "" ]
+      + ( if $bindingsLoaded
+          then [ "**\($exposed|length) of them are EXPOSED** (bound to a subject) - fix these first." ]
+          else [ "_No binding files supplied; cannot tell which risky roles are actually granted to anyone._" ] end )
+      + [ "", "## Exposed grants (Affects)", "" ]
+      + ( if ($exposed|length) > 0
+          then [ "| Severity | Granted to | Effective access | Role | Binding |", "| --- | --- | --- | --- | --- |" ]
+               + ( $exposed | map( . as $r | ($r|worst) as $w | ($r|loc|esc) as $l | ($r|accessCell) as $a
+                     | $r.subjects | map( (if .subNs != "" then "\(.subNs)/\(.subName)" else .subName end) as $who
+                         | "| \($w) | \("\(.subKind): \($who)"|esc) | \($a) | \($l) | \("\(.bindKind) \(.bindName)"|esc) |" ) )
+                   | add )
+          else [ "_None: no risky role is currently bound to a subject._" ] end )
+      + [ "" ]
+      + ( if ($unbound|length) > 0
+          then [ "## Unbound risky roles (latent - defined but not granted)", "",
+                 "| Severity | Role | Effective access |", "| --- | --- | --- |" ]
+               + ( $unbound | map( "| \(worst) | \(loc|esc) | \(accessCell) |" ) )
+               + [ "" ]
+          else [] end )
+    end )
+| .[]
+JQ
+)
+
 model="$(jq -n \
     --slurpfile cr "$croles" \
     --slurpfile r "$roles" \
@@ -248,6 +295,17 @@ printf '%s\n' "$model" | jq -r \
     --argjson useColor "$use_color" \
     --argjson bindingsLoaded "$bindings_loaded" \
     "$RENDER_PROGRAM"
+
+if [ -n "$markdown" ]; then
+    if printf '%s\n' "$model" | jq -r \
+        --argjson bindingsLoaded "$bindings_loaded" \
+        "$MD_PROGRAM" > "$markdown"; then
+        printf '\n[markdown] report written to %s\n' "$markdown"
+    else
+        echo "error: could not write markdown report to $markdown" >&2
+        exit 2
+    fi
+fi
 
 count="$(printf '%s\n' "$model" | jq 'length')"
 if [ "$count" -gt 0 ]; then
