@@ -48,9 +48,10 @@ def parse_args():
     parser.add_argument("--clusterRoles", metavar="FILE", help="ClusterRoles JSON file")
     parser.add_argument("--clusterRoleBindings", metavar="FILE", help="ClusterRoleBindings JSON file")
     parser.add_argument("--output", metavar="FILE",
-                        help="Also write pentest-ready reports: FILE.md (concise 'Affects' "
-                             "tables) and FILE.xlsx (full 'Evidence' spreadsheet). A trailing "
-                             ".md/.xlsx extension on FILE is ignored.")
+                        help="Also write pentest-ready reports: FILE-exposed.md and "
+                             "FILE-unbound.md (concise 'Affects' tables) plus FILE.xlsx "
+                             "(one 'Evidence' workbook with Exposed Roles and Unbound Roles "
+                             "tabs). A trailing .md/.xlsx extension on FILE is ignored.")
     return parser.parse_args()
 
 
@@ -413,60 +414,60 @@ class RbacAuditor:
         out.append(self._grid_table(["Severity", "Role", "Effective Access"], rows))
         return "\n".join(out) + "\n"
 
-    # -- xlsx reports (full "Evidence" spreadsheets) ------------------------
-    @staticmethod
-    def _style_sheet(ws, headers):
-        from openpyxl.styles import Alignment, Font, PatternFill
-        from openpyxl.utils import get_column_letter
+    # -- xlsx report (single workbook, two tabs) ----------------------------
+    _EXPOSED_HEADERS = ["Severity", "Kind", "Namespace", "Role", "Effective Access",
+                        "Subject Kind", "Subject Namespace", "Subject",
+                        "Binding Kind", "Binding"]
+    _UNBOUND_HEADERS = ["Severity", "Kind", "Namespace", "Role", "Effective Access"]
 
-        header_fill = PatternFill("solid", fgColor="1F2937")
-        header_font = Font(bold=True, color="FFFFFF")
-        for col, title in enumerate(headers, start=1):
-            cell = ws.cell(row=1, column=col)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = Alignment(vertical="center")
-            letter = get_column_letter(col)
-            width = max(len(title), *(len(str(c.value or "")) for c in ws[letter]))
-            ws.column_dimensions[letter].width = min(max(width + 2, 12), 60)
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = ws.dimensions
-
-    def write_xlsx_exposed(self, file_path):
-        """One row per permission per grant; every column populated, no Status."""
-        from openpyxl import Workbook
-
-        headers = ["Severity", "Kind", "Namespace", "Role", "Effective Access",
-                   "Subject Kind", "Subject Namespace", "Subject",
-                   "Binding Kind", "Binding"]
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Exposed Grants"
-        ws.append(headers)
+    def _exposed_rows(self):
+        """One row per permission per grant; every column populated."""
         for role in self._exposed_roles():
             namespace = role["namespace"] or ""
             for sev, issue in sorted(role["findings"], key=lambda f: _SEVERITY_ORDER[f[0]]):
                 for sub in role["subjects"]:
-                    ws.append([sev, role["kind"], namespace, role["name"], issue,
-                               sub["kind"], sub["namespace"] or "", sub["name"],
-                               sub["binding_kind"], sub["binding_name"]])
-        self._style_sheet(ws, headers)
-        wb.save(file_path)
+                    yield [sev, role["kind"], namespace, role["name"], issue,
+                           sub["kind"], sub["namespace"] or "", sub["name"],
+                           sub["binding_kind"], sub["binding_name"]]
 
-    def write_xlsx_unbound(self, file_path):
-        """One row per risky permission of each unbound role, no Status."""
-        from openpyxl import Workbook
-
-        headers = ["Severity", "Kind", "Namespace", "Role", "Effective Access"]
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Unbound Roles"
-        ws.append(headers)
+    def _unbound_rows(self):
+        """One row per risky permission of each unbound role."""
         for role in self._unbound_roles():
             namespace = role["namespace"] or ""
             for sev, issue in sorted(role["findings"], key=lambda f: _SEVERITY_ORDER[f[0]]):
-                ws.append([sev, role["kind"], namespace, role["name"], issue])
-        self._style_sheet(ws, headers)
+                yield [sev, role["kind"], namespace, role["name"], issue]
+
+    @staticmethod
+    def _add_table_sheet(ws, table_name, headers, rows):
+        """Fill a sheet with a native Excel table, no other formatting.
+
+        Styled 'Dark Teal, Table Style Medium 9' (built-in TableStyleMedium9).
+        """
+        from openpyxl.worksheet.table import Table, TableStyleInfo
+        from openpyxl.utils import get_column_letter
+
+        ws.append(headers)
+        for row in rows:
+            ws.append(row)
+        ref = f"A1:{get_column_letter(len(headers))}{ws.max_row}"
+        table = Table(displayName=table_name, ref=ref)
+        table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9",
+                                              showRowStripes=True)
+        ws.add_table(table)
+
+    def write_xlsx(self, file_path):
+        """Single workbook: an 'Exposed Roles' tab and an 'Unbound Roles' tab,
+        each a native Excel table styled 'Dark Teal, Table Style Medium 9'."""
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        exposed = wb.active
+        exposed.title = "Exposed Roles"
+        self._add_table_sheet(exposed, "ExposedRoles",
+                              self._EXPOSED_HEADERS, self._exposed_rows())
+        unbound = wb.create_sheet("Unbound Roles")
+        self._add_table_sheet(unbound, "UnboundRoles",
+                              self._UNBOUND_HEADERS, self._unbound_rows())
         wb.save(file_path)
 
 
@@ -499,12 +500,12 @@ def main():
                 base = base[: -len(ext)]
                 break
 
-        # One Markdown ("Affects") and one XLSX ("Evidence") per issue type.
+        # One Markdown ("Affects") per issue type, plus a single XLSX
+        # ("Evidence") workbook with an Exposed and an Unbound tab.
         outputs = [
             (f"{base}-exposed.md", auditor.markdown_exposed, "text"),
-            (f"{base}-exposed.xlsx", auditor.write_xlsx_exposed, "file"),
             (f"{base}-unbound.md", auditor.markdown_unbound, "text"),
-            (f"{base}-unbound.xlsx", auditor.write_xlsx_unbound, "file"),
+            (f"{base}.xlsx", auditor.write_xlsx, "file"),
         ]
         print()
         for path, producer, kind in outputs:
