@@ -446,7 +446,7 @@ class RbacAuditor:
         from openpyxl.worksheet.table import Table, TableStyleInfo
         from openpyxl.utils import get_column_letter
 
-        ws.append(headers)
+        ws.append([h.upper() for h in headers])
         for row in rows:
             ws.append(row)
         ref = f"A1:{get_column_letter(len(headers))}{ws.max_row}"
