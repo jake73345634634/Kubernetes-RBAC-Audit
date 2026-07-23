@@ -372,15 +372,32 @@ class RbacAuditor:
             return "\n".join(out) + "\n"
 
         out += [self._summary_line(roles), ""]
-        rows = []
+
+        # A subject is often bound to several different roles that grant the
+        # same effective access (e.g. many cert-manager roles all "read
+        # secrets"). Collapse those into one row per (subject, access) and show
+        # a "Grants" count of how many distinct roles produce it, so identical
+        # rows don't repeat.
+        groups = {}
+        order = []
         for role in roles:
+            access = tuple(self._access_bullets(role))
+            role_key = (role["kind"], role["namespace"], role["name"])
             for sub in role["subjects"]:
-                rows.append([
-                    [self._worst(role)],
-                    [f"{sub['kind']}: {self._subject_who(sub)}"],
-                    self._access_bullets(role),
-                ])
-        out.append(self._grid_table(["Severity", "Granted To", "Effective Access"], rows))
+                subject = f"{sub['kind']}: {self._subject_who(sub)}"
+                key = (subject, access)
+                group = groups.get(key)
+                if group is None:
+                    group = {"severity": self._worst(role), "subject": subject,
+                             "access": access, "roles": set()}
+                    groups[key] = group
+                    order.append(key)
+                group["roles"].add(role_key)
+
+        rows = [[[g["severity"]], [g["subject"]], [str(len(g["roles"]))], list(g["access"])]
+                for g in (groups[k] for k in order)]
+        out.append(self._grid_table(
+            ["Severity", "Granted To", "Grants", "Effective Access"], rows))
         return "\n".join(out) + "\n"
 
     def markdown_unbound(self):
